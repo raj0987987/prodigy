@@ -1,0 +1,171 @@
+import argparse
+import os
+import sys
+import unittest
+import tempfile
+
+def encrypt_decrypt_bmp(image_path: str, output_path: str, key: int) -> bool:
+    """
+    Encrypts or decrypts a BMP image by XORing the pixel byte array.
+    Leaves the BMP file header intact so that the file remains a valid, viewable image.
+    
+    Args:
+        image_path (str): The source BMP image file path.
+        output_path (str): The destination BMP image file path to save the result.
+        key (int): The integer key (0-255) used for XOR pixel manipulation.
+        
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    if not os.path.exists(image_path):
+        print(f"Error: The file '{image_path}' does not exist.")
+        return False
+        
+    try:
+        with open(image_path, 'rb') as f:
+            data = bytearray(f.read())
+            
+        # BMP files must start with the header signature 'BM'
+        if data[0:2] != b'BM':
+            print("Error: The file is not a valid BMP image. This pure-Python tool requires BMP files.")
+            return False
+            
+        # The offset to the starting address of the byte array (pixels) is at bytes 10-13 (little-endian)
+        pixel_offset = int.from_bytes(data[10:14], byteorder='little')
+        
+        # Apply XOR encryption to the pixel data only, leaving the headers intact
+        for i in range(pixel_offset, len(data)):
+            data[i] = data[i] ^ key
+            
+        with open(output_path, 'wb') as f:
+            f.write(data)
+            
+        print(f"Success: Processed image saved to '{output_path}'")
+        return True
+    except Exception as e:
+        print(f"An error occurred during pixel manipulation: {e}")
+        return False
+
+def interactive_mode():
+    print("========================================")
+    print("   Pure Python BMP Image Crypt (XOR)    ")
+    print("========================================")
+    while True:
+        choice = input("Do you want to (p)rocess a BMP image or (q)uit? ").lower().strip()
+        if choice in ('q', 'quit', 'exit'):
+            print("Goodbye!")
+            break
+        elif choice not in ('p', 'process'):
+            print("Invalid choice. Please enter 'p' or 'q'.")
+            continue
+            
+        image_path = input("Enter path to input BMP image: ").strip()
+        if not os.path.exists(image_path):
+            print("Error: Input file does not exist.")
+            continue
+            
+        output_path = input("Enter path for output BMP image: ").strip()
+        
+        while True:
+            try:
+                key = int(input("Enter key (integer 0-255): "))
+                if 0 <= key <= 255:
+                    break
+                key = key % 256
+                break
+            except ValueError:
+                print("Please enter a valid integer key.")
+                
+        encrypt_decrypt_bmp(image_path, output_path, key)
+        print()
+
+# Built-in unit tests to test BMP manipulation correctness
+class TestBMPCrypt(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.original_path = os.path.join(self.test_dir.name, "original.bmp")
+        self.encrypted_path = os.path.join(self.test_dir.name, "encrypted.bmp")
+        self.decrypted_path = os.path.join(self.test_dir.name, "decrypted.bmp")
+        
+        # Generate a minimal valid 2x2 24-bit BMP image structure
+        # BMP File Header (14 bytes)
+        file_header = bytearray(b'BM')                  # Signature
+        file_header += (66).to_bytes(4, 'little')       # File size (54 header + 12 pixel data = 66)
+        file_header += (0).to_bytes(4, 'little')        # Reserved
+        file_header += (54).to_bytes(4, 'little')       # Pixel data offset (54 bytes)
+        
+        # DIB Header (40 bytes - BITMAPINFOHEADER)
+        dib_header = (40).to_bytes(4, 'little')         # Header size
+        dib_header += (2).to_bytes(4, 'little')         # Width (2)
+        dib_header += (2).to_bytes(4, 'little')         # Height (2)
+        dib_header += (1).to_bytes(2, 'little')         # Color planes (1)
+        dib_header += (24).to_bytes(2, 'little')        # Bits per pixel (24 bit RGB)
+        dib_header += (0).to_bytes(4, 'little')         # Compression (0 = none)
+        dib_header += (12).to_bytes(4, 'little')        # Image size
+        dib_header += (2835).to_bytes(4, 'little')      # Horizontal resolution
+        dib_header += (2835).to_bytes(4, 'little')      # Vertical resolution
+        dib_header += (0).to_bytes(4, 'little')         # Colors in palette
+        dib_header += (0).to_bytes(4, 'little')         # Important colors
+        
+        # Correct file size in header
+        file_header[2:6] = (70).to_bytes(4, 'little')
+        dib_header[20:24] = (16).to_bytes(4, 'little')
+        
+        pixel_data = bytearray([
+            255, 0, 0,  0, 255, 0,  0, 0,  # Row 1: Blue, Green, Padding
+            0, 0, 255,  255, 255, 255,  0, 0   # Row 2: Red, White, Padding
+        ])
+        
+        with open(self.original_path, 'wb') as f:
+            f.write(file_header + dib_header + pixel_data)
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def test_bmp_roundtrip(self):
+        key = 188
+        
+        # Run Encryption
+        self.assertTrue(encrypt_decrypt_bmp(self.original_path, self.encrypted_path, key))
+        self.assertTrue(os.path.exists(self.encrypted_path))
+        
+        # Check that files differ (at least the pixel portion)
+        with open(self.original_path, 'rb') as f1, open(self.encrypted_path, 'rb') as f2:
+            orig_bytes = f1.read()
+            enc_bytes = f2.read()
+            self.assertNotEqual(orig_bytes, enc_bytes)
+            # Headers must match
+            self.assertEqual(orig_bytes[:54], enc_bytes[:54])
+            
+        # Run Decryption
+        self.assertTrue(encrypt_decrypt_bmp(self.encrypted_path, self.decrypted_path, key))
+        
+        # Verify decrypted bytes match original bytes perfectly
+        with open(self.original_path, 'rb') as f1, open(self.decrypted_path, 'rb') as f2:
+            self.assertEqual(f1.read(), f2.read())
+
+def main():
+    parser = argparse.ArgumentParser(description="Image Encryption and Decryption using BMP Pixel Manipulation (XOR).")
+    parser.add_argument('-i', '--input', help="Path to the input BMP image file")
+    parser.add_argument('-o', '--output', help="Path to save the output BMP image file")
+    parser.add_argument('-k', '--key', type=int, help="Encryption/Decryption key (an integer)")
+    parser.add_argument('--interactive', action='store_true', help="Run in interactive mode")
+    parser.add_argument('--test', action='store_true', help="Run built-in unit tests")
+    
+    args = parser.parse_args()
+    
+    if args.test:
+        suite = unittest.TestLoader().loadTestsFromTestCase(TestBMPCrypt)
+        runner = unittest.TextTestRunner(verbosity=2)
+        result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
+        
+    if args.interactive or (args.input is None and args.output is None and args.key is None):
+        interactive_mode()
+    else:
+        if args.input is None or args.output is None or args.key is None:
+            parser.error("All of --input, --output, and --key must be provided when not running interactively.")
+        encrypt_decrypt_bmp(args.input, args.output, args.key % 256)
+
+if __name__ == "__main__":
+    main()
