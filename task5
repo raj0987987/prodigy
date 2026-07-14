@@ -1,0 +1,110 @@
+import socket
+import struct
+import sys
+
+def parse_ipv4_header(packet_data):
+    """
+    Parses the first 20 bytes of the packet containing the IPv4 header.
+    IPv4 Header format:
+    https://en.wikipedia.org/wiki/IPv4#Header
+    """
+    # Unpack the first 20 bytes of the packet
+    # Format string explanation:
+    # !: Network byte order (big-endian)
+    # B: unsigned char (1 byte) -> Version & IHL
+    # B: unsigned char (1 byte) -> Type of Service
+    # H: unsigned short (2 bytes) -> Total Length
+    # H: unsigned short (2 bytes) -> Identification
+    # H: unsigned short (2 bytes) -> Flags & Fragment Offset
+    # B: unsigned char (1 byte) -> TTL (Time to Live)
+    # B: unsigned char (1 byte) -> Protocol (TCP = 6, UDP = 17, ICMP = 1)
+    # H: unsigned short (2 bytes) -> Header Checksum
+    # 4s: 4-byte string -> Source IP Address
+    # 4s: 4-byte string -> Destination IP Address
+    ip_header = struct.unpack('!BBHHHBBH4s4s', packet_data[:20])
+    
+    # Extract fields using bit shifting / masking
+    version_ihl = ip_header[0]
+    version = version_ihl >> 4
+    ihl = (version_ihl & 0xF) * 4 # Header length in bytes
+    
+    ttl = ip_header[5]
+    protocol = ip_header[6]
+    
+    # Format IP addresses
+    src_ip = socket.inet_ntoa(ip_header[8])
+    dst_ip = socket.inet_ntoa(ip_header[9])
+    
+    return {
+        "version": version,
+        "header_len": ihl,
+        "ttl": ttl,
+        "protocol": protocol,
+        "src_ip": src_ip,
+        "dst_ip": dst_ip,
+        "payload": packet_data[ihl:] # Slice off the header
+    }
+
+def get_protocol_name(proto_num):
+    protocols = {1: "ICMP", 6: "TCP", 17: "UDP"}
+    return protocols.get(proto_num, f"Unknown ({proto_num})")
+
+def main():
+    # Detect the operating system to configure the raw socket
+    if sys.platform == "win32":
+        # On Windows, bind to the local interface and enable promiscuous mode
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        
+        # Create raw socket (IPv4, raw packet stream)
+        sniffer = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
+        sniffer.bind((local_ip, 0))
+        
+        # Include IP headers in the captured packets
+        sniffer.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        # Enable promiscuous mode
+        sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+        print(f"[*] Windows Sniffer initialized on interface: {local_ip}")
+    else:
+        # On Linux/macOS, use socket.AF_PACKET or raw IP protocol
+        try:
+            sniffer = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        except PermissionError:
+            print("[!] Error: Packet sniffing requires administrator/root privileges.")
+            sys.exit(1)
+        print("[*] Linux/macOS Sniffer initialized")
+
+    print("[*] Sniffing started... Press Ctrl+C to stop.\n")
+    
+    try:
+        packet_count = 0
+        while True:
+            # Receive a packet from the network socket (buffer size 65535 bytes)
+            raw_data, addr = sniffer.recvfrom(65535)
+            packet_count += 1
+            
+            # Parse the IPv4 Header
+            ip_info = parse_ipv4_header(raw_data)
+            
+            # Format and display packet information
+            proto_name = get_protocol_name(ip_info["protocol"])
+            print(f"[{packet_count}] Protocol: {proto_name} | TTL: {ip_info['ttl']}")
+            print(f"    Source IP:      {ip_info['src_ip']}")
+            print(f"    Destination IP: {ip_info['dst_ip']}")
+            
+            # Print a safe ASCII representation of the payload (truncated to 64 bytes)
+            payload = ip_info["payload"][:64]
+            if payload:
+                ascii_payload = "".join(chr(b) if 32 <= b <= 126 else "." for b in payload)
+                print(f"    Payload Preview (ASCII): {ascii_payload}")
+            print("-" * 60)
+            
+    except KeyboardInterrupt:
+        print("\n[*] Stopping sniffer...")
+        # Disable promiscuous mode on Windows before exiting
+        if sys.platform == "win32":
+            sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
