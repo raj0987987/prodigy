@@ -1,0 +1,63 @@
+from scapy.all import sniff
+from scapy.layers.inet import IP, TCP, UDP, ICMP
+
+# ==============================================================================
+# DISCLAIMER: This script is for educational purposes only.
+# Use this tool only on systems and networks where you have explicit permission.
+# Unauthorized interception of network traffic is illegal and unethical.
+# ==============================================================================
+
+def packet_callback(packet):
+    """
+    Callback function to process captured packets.
+    Extracts and prints source IP, destination IP, protocol, and basic payload data.
+    """
+    # Check if the packet has an IP layer
+    if IP in packet:
+        ip_src = packet[IP].src
+        ip_dst = packet[IP].dst
+        protocol = packet[IP].proto
+
+        # Map protocol numbers to names
+        if protocol == 1:
+            proto_name = "ICMP"
+        elif protocol == 6:
+            proto_name = "TCP"
+        elif protocol == 17:
+            proto_name = "UDP"
+        else:
+            proto_name = str(protocol)
+
+        print(f"[*] IP Packet: {ip_src} -> {ip_dst} (Protocol: {proto_name})")
+
+        # Extract payload data for TCP or UDP
+        payload = None
+        if TCP in packet:
+            payload = bytes(packet[TCP].payload)
+        elif UDP in packet:
+            payload = bytes(packet[UDP].payload)
+
+        if payload:
+            # Print a snippet of the payload (first 50 bytes) to avoid flooding the console
+            print(f"    Payload: {payload[:50]}...")
+            
+        print("-" * 50)
+
+def main():
+    print("=" * 60)
+    print("WARNING: Basic Packet Sniffer Started.")
+    print("This tool is for educational purposes and authorized testing only.")
+    print("Capturing packets... Press Ctrl+C to stop.")
+    print("=" * 60)
+    
+    try:
+        # Sniff packets; store=False prevents keeping all packets in memory
+        sniff(prn=packet_callback, store=False)
+    except PermissionError:
+        print("\n[!] Error: You need to run this script as an Administrator to capture packets.")
+    except Exception as e:
+        print(f"\n[!] An error occurred: {e}")
+        print("Note: On Windows, you typically need to install Npcap (https://npcap.com/) for packet sniffing to work.")
+
+if _name_ == "_main_":
+    main()
